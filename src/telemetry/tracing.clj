@@ -1,15 +1,32 @@
 (ns telemetry.tracing
   (:require [clojure.walk :as walk])
-  (:import [io.opentelemetry.sdk.trace SdkTracerProvider]
-           [io.opentelemetry.api OpenTelemetry]
-           [io.opentelemetry.sdk OpenTelemetrySdk]
+  (:import [io.opentelemetry.context Context]
            [io.opentelemetry.context.propagation ContextPropagators]
-           [io.opentelemetry.api.trace.propagation W3CTraceContextPropagator]
+           [io.opentelemetry.sdk.trace SdkTracerProvider]
+           [io.opentelemetry.sdk OpenTelemetrySdk]
            [io.opentelemetry.sdk.trace.export BatchSpanProcessor SimpleSpanProcessor]
-           [io.grpc ManagedChannelBuilder]
+           [io.opentelemetry.api OpenTelemetry]
+           [io.opentelemetry.api.trace.propagation W3CTraceContextPropagator]
+           [io.opentelemetry.api.common Attributes]
            [io.opentelemetry.exporter.jaeger JaegerGrpcSpanExporter]
-           [io.opentelemetry.context Context]
-           [io.opentelemetry.api.common Attributes]))
+           [io.opentelemetry.exporter.otlp.trace OtlpGrpcSpanExporter OtlpGrpcSpanExporterBuilder]
+           [io.grpc ManagedChannelBuilder]
+           [java.util Base64]
+           ))
+
+(defn build-exporter-otlp
+  [{:keys [endpoint timeout-ms headers basic-auth]
+    :or {timeout-ms 30000}}]
+  {:pre [endpoint]}
+  (let [^OtlpGrpcSpanExporterBuilder builder (OtlpGrpcSpanExporter/builder)]
+    (doto builder
+      (.setEndpoint endpoint)
+      (cond-> timeout-ms (.setTimeout timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)))
+    (when (map? headers)
+      (doseq [[key val] headers] (.addHeader builder (name key) (str val))))
+    (when (and (map? basic-auth) (:username basic-auth) (:password basic-auth))
+      (.addHeader builder "Authorization" (.encodeToString (Base64/getEncoder) (.getBytes (str  (:username basic-auth) ":" (:password basic-auth))))))
+    (.build builder)))
 
 (defn build-exporter-jaeger
   [service-name ip port]
@@ -31,8 +48,7 @@
 
 (defn build-simple-span-processor
   [exporter]
-  (-> (SimpleSpanProcessor/builder exporter)
-      .build))
+  (SimpleSpanProcessor/create exporter))
 
 (defn init-open-telemetry
   [span-processor]
