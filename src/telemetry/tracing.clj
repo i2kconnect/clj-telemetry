@@ -25,7 +25,7 @@
     (when (map? headers)
       (doseq [[key val] headers] (.addHeader builder (name key) (str val))))
     (when (and (map? basic-auth) (:username basic-auth) (:password basic-auth))
-      (.addHeader builder "Authorization" (.encodeToString (Base64/getEncoder) (.getBytes (str  (:username basic-auth) ":" (:password basic-auth))))))
+      (.addHeader builder "Authorization" (str "Basic " (.encodeToString (Base64/getEncoder) (.getBytes (str  (:username basic-auth) ":" (:password basic-auth)))))))
     (.build builder)))
 
 (defn build-exporter-jaeger
