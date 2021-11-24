@@ -6,15 +6,17 @@
            [io.opentelemetry.sdk OpenTelemetrySdk]
            [io.opentelemetry.sdk.trace.export BatchSpanProcessor SimpleSpanProcessor]
            [io.opentelemetry.api OpenTelemetry]
+           [io.opentelemetry.api.trace Span]
            [io.opentelemetry.api.trace.propagation W3CTraceContextPropagator]
            [io.opentelemetry.api.common Attributes]
-           [io.opentelemetry.exporter.jaeger JaegerGrpcSpanExporter]
+           [io.opentelemetry.exporter.jaeger JaegerGrpcSpanExporter JaegerGrpcSpanExporterBuilder]
            [io.opentelemetry.exporter.otlp.trace OtlpGrpcSpanExporter OtlpGrpcSpanExporterBuilder]
-           [io.grpc ManagedChannelBuilder]
+           [io.opentelemetry.exporter.zipkin ZipkinSpanExporter ZipkinSpanExporterBuilder]
+           [io.grpc ManagedChannel ManagedChannelBuilder]
            [java.util Base64]
            ))
 
-(defn build-exporter-otlp
+(defn ^OtlpGrpcSpanExporter build-exporter-otlp
   [{:keys [endpoint timeout-ms headers basic-auth]
     :or {timeout-ms 30000}}]
   {:pre [endpoint]}
@@ -28,16 +30,32 @@
       (.addHeader builder "Authorization" (str "Basic " (.encodeToString (Base64/getEncoder) (.getBytes (str  (:username basic-auth) ":" (:password basic-auth)))))))
     (.build builder)))
 
-(defn build-exporter-jaeger
-  [service-name ip port]
-  (let [port (Integer. port)
-        channel (-> (ManagedChannelBuilder/forAddress ip port)
-                    (.usePlaintext)
-                    (.build))
-        exporter (-> (JaegerGrpcSpanExporter/builder)
-                     (.setServiceName service-name)
-                     (.setChannel channel)
-                     (.setDeadlineMs 30000)
+(defn ^ZipkinSpanExporter build-exporter-zipkin
+  [{:keys [endpoint timeout-ms]
+    :or {timeout-ms 30000}}]
+  {:pre [endpoint]}
+  (let [^ZipkinSpanExporterBuilder builder (ZipkinSpanExporter/builder)]
+    (doto builder
+      (.setEndpoint endpoint)
+      (cond-> timeout-ms (.setReadTimeout timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)))
+    (.build builder)))
+
+(defn ^JaegerGrpcSpanExporter build-exporter-jaeger
+  [{:keys [endpoint ip port timeout-ms channel] :or {timeout-ms 30000 port 14250}}]
+  (let [port (cond (string? port) (Integer/parseInt port)
+                   (integer? port) port
+                   :else (throw (Exception. "Jaeger exporter port must be integer or string")))
+        ^ManagedChannel channel (cond endpoint nil
+                                      channel channel
+                                      :else (let [^ManagedChannelBuilder channelbuilder (ManagedChannelBuilder/forAddress ip port)]
+                                              (-> channelbuilder
+                                                  (.usePlaintext)
+                                                  (.build))))
+        ^JaegerGrpcSpanExporterBuilder exporter-builder (JaegerGrpcSpanExporter/builder)
+        exporter (-> exporter-builder
+                     (cond-> channel (.setChannel channel))
+                     (cond-> endpoint (.setEndpoint endpoint))
+                     (.setTimeout timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)
                      (.build))]
     exporter))
 
@@ -52,30 +70,38 @@
 
 (defn init-open-telemetry
   [span-processor]
-  (let [open-telemetry (.build (OpenTelemetrySdk/builder))]
-    (-> open-telemetry
-        .getTracerManagement
-        (.addSpanProcessor span-processor))
-    open-telemetry))
+  {:pre [span-processor]
+   :post [%]}
+  (-> (OpenTelemetrySdk/builder)
+      (.setTracerProvider (-> (SdkTracerProvider/builder)
+                              (.addSpanProcessor span-processor)
+                              (.build)))
+      (.build)))
 
 (defn shutdown-open-telemetry
   [open-telemetry]
-  (-> (.getTraceManagement open-telemetry)
+  (-> (.getSdkTracerProvider open-telemetry)
       (.shutdown)))
 
 (defn get-tracer
-  [open-telemetry library-name]
+  [open-telemetry & [library-name]]
+  {:pre [open-telemetry]
+   :post [%]}
   (if open-telemetry
-    (.getTracer open-telemetry (or library-name "telemetry.tracing"))))
+    (if-let [tracer (.getTracer open-telemetry (or library-name "telemetry.tracing"))]
+      tracer
+      (.build (.tracerBuilder open-telemetry (or library-name "telemetry.tracing"))))))
 
 (defn create-span
   ([tracer id]
    (create-span tracer id nil))
   ([tracer id parent]
+   {:pre [(or (nil? parent) (instance? Span parent))]}
    (if tracer
      (let [span (if parent
-                  (.setParent (.spanBuilder tracer id)
-                              (.with (Context/current) parent))
+                  (-> (.spanBuilder tracer id)
+                      (.setParent (-> (Context/current)
+                                      (.with parent))))
                   (.spanBuilder tracer id))]
        (.startSpan span)))))
 
@@ -113,47 +139,5 @@
   (def tracer (get-tracer open-telemetry "test.tracing"))
   )
 
-(defn test-span
-  [tracer]
-  (let [span1 (create-span tracer "span-1")]
-    (add-event span1 "1. first event")
-    (add-event span1 "1. second event")
-    (let [span2 (create-span tracer "span-2")]
-      (add-event span2 "span 2. first event")
-      (add-event span2 "span 2. second event" {"attr1" "attr1 value"
-                                               "attr2" "attr2 value2"})
-      (.end span2))
-    (.end span1)))
 
-(defn test-parent-span
-  [tracer]
-  (let [root (create-span tracer "test-parent-span")]
-    (add-event root "root event")
-    (let [child (create-span tracer "test-parent-span child" root)]
-      (add-event child "child span")
-      (add-event root "root span with child")
-      (.end child)
-      (add-event child "child span after end child"))
-    (add-event root "root span after child")
-    (add-event root "root span after end root")
-    (.end root)))
 
-(defn test-parallel-spans
-  [tracer]
-  (let [span-1 (create-span tracer "test-parallel-1")
-        span-2 (create-span tracer "test-parallel-2")]
-    (add-event span-1 "begin")
-    (add-event span-2 "event: a")
-    (Thread/sleep 1000)
-    (add-event span-1 "event: b")
-    (Thread/sleep 1000)
-    (add-event span-2 "event: c")
-    (Thread/sleep 1000)
-    (add-event span-1 "event: d")
-    (Thread/sleep 1000)
-    (add-event span-2 "event: e")
-    (Thread/sleep 1000)
-    (add-event span-1 "event: f")
-    (add-event span-2 "span: after end span")
-    (.end span-1)
-    (.end span-2)))

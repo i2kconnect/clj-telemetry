@@ -8,7 +8,9 @@
                  [io.opentelemetry/opentelemetry-sdk "1.9.0"]
                  [io.opentelemetry/opentelemetry-exporter-jaeger "1.9.0"]
                  [io.opentelemetry/opentelemetry-exporter-otlp "1.9.0"]
+                 [io.opentelemetry/opentelemetry-exporter-zipkin "1.9.0"]
                  ;;[io.grpc/grpc-protobuf "1.34.1"]
                  ;;[io.grpc/grpc-netty-shaded "1.34.1"]
                  ]
+  :profiles {:test {:dependencies [[io.opentelemetry/opentelemetry-exporters-inmemory "0.9.1"]]}}
   :repl-options {:init-ns telemetry.tracing})
