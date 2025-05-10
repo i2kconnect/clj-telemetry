@@ -102,7 +102,8 @@
                   (-> (.spanBuilder tracer id)
                       (.setParent (-> (Context/current)
                                       (.with parent))))
-                  (.spanBuilder tracer id))]
+                  (-> (.spanBuilder tracer id)
+                      (.setNoParent)))]
        (.startSpan span)))))
 
 (defn end-span
