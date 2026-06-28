@@ -9,10 +9,8 @@
            [io.opentelemetry.api.trace Span]
            [io.opentelemetry.api.trace.propagation W3CTraceContextPropagator]
            [io.opentelemetry.api.common Attributes]
-           [io.opentelemetry.exporter.jaeger JaegerGrpcSpanExporter JaegerGrpcSpanExporterBuilder]
            [io.opentelemetry.exporter.otlp.trace OtlpGrpcSpanExporter OtlpGrpcSpanExporterBuilder]
            [io.opentelemetry.exporter.zipkin ZipkinSpanExporter ZipkinSpanExporterBuilder]
-           [io.grpc ManagedChannel ManagedChannelBuilder]
            [java.util Base64]
            ))
 
@@ -40,24 +38,25 @@
       (cond-> timeout-ms (.setReadTimeout timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)))
     (.build builder)))
 
-(defn ^JaegerGrpcSpanExporter build-exporter-jaeger
-  [{:keys [endpoint ip port timeout-ms channel] :or {timeout-ms 30000 port 14250}}]
+(defn ^OtlpGrpcSpanExporter build-exporter-jaeger
+  "Builds an OTLP gRPC span exporter aimed at Jaeger's native OTLP gRPC
+  endpoint (default port 4317). The Jaeger exporter was removed from
+  OpenTelemetry Java after 1.34.1; Jaeger now ingests OTLP natively. The name
+  and argument shape are preserved for callers that select this exporter by
+  name. If :endpoint is given it is used verbatim; otherwise :ip/:port (default
+  4317) compose an http endpoint, falling back to http://localhost:4317."
+  [{:keys [endpoint ip port timeout-ms] :or {timeout-ms 30000 port 4317}}]
   (let [port (cond (string? port) (Integer/parseInt port)
                    (integer? port) port
                    :else (throw (Exception. "Jaeger exporter port must be integer or string")))
-        ^ManagedChannel channel (cond endpoint nil
-                                      channel channel
-                                      :else (let [^ManagedChannelBuilder channelbuilder (ManagedChannelBuilder/forAddress ip port)]
-                                              (-> channelbuilder
-                                                  (.usePlaintext)
-                                                  (.build))))
-        ^JaegerGrpcSpanExporterBuilder exporter-builder (JaegerGrpcSpanExporter/builder)
-        exporter (-> exporter-builder
-                     (cond-> channel (.setChannel channel))
-                     (cond-> endpoint (.setEndpoint endpoint))
-                     (.setTimeout timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)
-                     (.build))]
-    exporter))
+        endpoint (or endpoint
+                     (when ip (str "http://" ip ":" port))
+                     "http://localhost:4317")
+        ^OtlpGrpcSpanExporterBuilder builder (OtlpGrpcSpanExporter/builder)]
+    (doto builder
+      (.setEndpoint endpoint)
+      (cond-> timeout-ms (.setTimeout timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)))
+    (.build builder)))
 
 (defn build-batch-span-processor
   [exporter]
@@ -134,7 +133,7 @@
        (.addEvent span message)))))
 
 (comment
-  (def exporter (build-exporter-jaeger "test-service-name" "localhost" "14250"))
+  (def exporter (build-exporter-jaeger {:ip "localhost" :port 4317}))
   (def span-processor (build-simple-span-processor exporter))
   (def open-telemetry (init-open-telemetry exporter))
   (def tracer (get-tracer open-telemetry "test.tracing"))

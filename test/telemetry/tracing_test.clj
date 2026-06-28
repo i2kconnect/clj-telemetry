@@ -1,8 +1,7 @@
 (ns telemetry.tracing-test
   (:require [clojure.test :refer :all]
             [telemetry.tracing :refer :all])
-  (:import [io.opentelemetry.exporter.jaeger JaegerGrpcSpanExporter]
-           [io.opentelemetry.exporter.otlp.trace OtlpGrpcSpanExporter]
+  (:import [io.opentelemetry.exporter.otlp.trace OtlpGrpcSpanExporter]
            [io.opentelemetry.exporter.zipkin ZipkinSpanExporter]
            [io.opentelemetry.sdk.trace.export BatchSpanProcessor SimpleSpanProcessor]
            [io.opentelemetry.exporters.inmemory InMemorySpanExporter]
@@ -41,7 +40,7 @@
 
 (deftest test-build-exporter-jaeger
   (let [exporter (build-exporter-jaeger {:endpoint "https://localhost:14250"})]
-    (is (instance? JaegerGrpcSpanExporter exporter))))
+    (is (instance? OtlpGrpcSpanExporter exporter))))
 
 (deftest test-build-batch-span-processor
   (let [processor (build-batch-span-processor (build-exporter-jaeger {:endpoint "https://localhost:14250"}))]
